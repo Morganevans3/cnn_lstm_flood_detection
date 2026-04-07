@@ -1,0 +1,29 @@
+# Python dependencies for Indonesia Flood CNN-LSTM
+
+# Core Data Science
+numpy
+pandas
+scipy
+pyyaml
+click
+bottleneck
+scikit-learn
+
+# Geospatial Heavy Lifters
+boto3  # Required for CDSE S3 access via rasterio AWSSession
+geopandas
+pyproj
+rioxarray
+xarray
+pystac-client
+planetary-computer
+stackstac
+requests
+pysheds>=0.3.0
+shapely
+
+# Deep Learning
+torch>=2.1.0
+pytorch-lightning>=2.5.0
+torchmetrics
+tensorboard

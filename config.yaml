@@ -1,0 +1,163 @@
+# Project Metadata
+project_name: "indonesia-flood-detection"
+experiment_name: "indonesia_full_2001_2021"
+
+# 1. Spatial & Temporal Settings
+# Full Indonesia bounds (for production)
+# bbox: [95.0, -11.0, 126.0, 6.0]
+# Jakarta test area (for development/testing)
+bbox: [106.7, -6.3, 106.9, -6.1]
+flood_date: "2024-01-15"  # Default/test date
+
+# Temporal split settings for full Indonesia dataset
+temporal_split:
+  train_start_year: 2017
+  train_end_year: 2021      # Inclusive (use Sentinel-1 labels)
+  inference_start_year: 2001
+  inference_end_year: 2016  # Inclusive (MODIS-only, no Sentinel-1)
+  date_frequency: weekly    # Options: 'daily', 'weekly' (8-day MODIS), 'monthly'
+                            # weekly = every 8 days (MODIS composite frequency, ~228 dates for 2017-2021, takes ~19 hours)
+  
+# Leave-One-Year-Out (LOYO) Cross-Validation settings
+loyo_cv:
+  enabled: true              # Use LOYO cross-validation
+  train_years: [2017, 2018, 2019, 2020, 2021]  # Years to use (will create 5 folds)
+  # Each fold: train on 4 years, validate on 1 year
+  
+# Tiling settings for large-area processing
+tiling:
+  enabled: false            # Set to true for full Indonesia processing
+  tile_size_degrees: 1.0    # 1° × 1° tiles (~111 km × 111 km)
+  overlap_degrees: 0.1      # 10% overlap between tiles (0.1°)
+  
+# Flood event dates for training (to be filled in)
+# These will be used when processing full dataset
+flood_events_train: []      # List of dates like ["2017-01-15", "2018-03-22", ...]
+flood_events_inference: []  # Optional: specific dates for inference period
+
+# 2. Data Download Settings
+data_download:
+  s1_days_window: 8    # Days to search before/after flood date for Sentinel-1
+  modis_days_back: 80  # Days to look back from flood date for MODIS
+  # Sentinel-1 source: CDSE (Copernicus Data Space Ecosystem) or Planetary Computer (Azure)
+  use_copernicus_s1: true   # true = CDSE (official Copernicus; needs credentials). false = Microsoft Planetary Computer.
+  # CDSE credentials for Sentinel-1 (required when use_copernicus_s1=true).
+  # OAuth: for STAC search. S3 keys: for asset download (from eodata.dataspace.copernicus.eu, NOT AWS).
+  # Get S3 keys: https://eodata-s3keysmanager.dataspace.copernicus.eu/
+  cdse_client_id: null       # OAuth: STAC search
+  cdse_client_secret: null   # OAuth: STAC search
+  cdse_s3_access_key: null  # S3: asset download (CDSE only)
+  cdse_s3_secret_key: null  # S3: asset download (CDSE only)
+  # Sentinel-1 collection(s) - used only when use_copernicus_s1=false (Planetary Computer).
+  # CDSE uses sentinel-1-grd / SENTINEL-1 internally.
+  s1_collections: ["sentinel-1-rtc", "sentinel-1-grd"]
+
+# 3. Data Processing Settings
+data_processing:
+  modis_bands: ["sur_refl_b01", "sur_refl_b02", "sur_refl_b03", "sur_refl_b04", "sur_refl_b05", "sur_refl_b06", "sur_refl_b07"] # MODIS reflectance bands
+  s1_flood_threshold_percentile: 20 # Percentile for Sentinel-1 flood detection (e.g., 20 means values below 20th percentile are water)
+  hand_accumulation_threshold: 100 # Accumulation threshold for stream initiation in HAND calculation
+  target_resolution: 500 # Target resolution in meters for alignment (e.g., 500 for MODIS)
+
+# 4. Model Hyperparameters
+model:
+  in_channels: 8             # 7 MODIS bands + 1 HAND
+  sequence_length: 10        # Number of time steps
+  hidden_dim: 128            # LSTM hidden state size
+  learning_rate: 0.0001
+  cnn_out_channels: 64
+  spatial_output_size: 4     # Size of feature map after CNN pooling
+  img_hw: 64
+  cvpr23_init_size: 24
+  cvpr23_nb_layers: 1
+
+# 5. Training Parameters
+training:
+  # train_from_5d_data.ipynb: legacy = RAM patches (cells 3-6); tiles = Tile5dDataModule; patches = patch shards
+  data_mode: legacy
+  # LOYO folds (tiles or patches): epochs per held-out year (cell 7); defaults to max_epochs if unset
+  epochs_per_loyo_fold: 5
+  batch_size: 32
+  max_epochs: 50
+  num_workers: 11            # Colab crossval notebook / local SSD; use 0–4 on Drive if unstable
+  patience: 10               # Early stopping patience
+  val_split: 0.2             # 20% of patches used for validation
+  # --- train_colab_crossval_style.ipynb (optional; defaults exist in notebook) ---
+  max_quality_train_keys: 2000
+  quality_training_cache_dir: "data/quality_training_cache"
+  quality_force_rebuild_cache: false
+  quality_rank_num_workers: 11
+  quality_per_key_timeout_sec: 120
+  quality_retry_timeout_sec: 0
+  quality_min_selected_target: 1500
+  colab_copy_5d_to_local: false  # true = one-time copy of 5° MODIS/S1 to Colab SSD (tiles mode); train_from_5d uses Drive by default
+  colab_local_5d_root: "/content/indonesia_5d_local"
+  curriculum_val_year: 2017
+  curriculum_dataloader_num_workers: 11
+  tile5d_num_workers: 11
+  tile5d_modis_cache_max: 64
+  tile5d_s1_cache_max: 128
+  tile_batch_size: 96
+  epochs_full_data_stage: 8
+  # train_thesis_loyo_fastai.ipynb (null or 0 = use full train pool per fold, often ~4–5k keys)
+  # raw = GeoTIFF/.npy tile-dates; shards = patch_shard_*.npz (LOYO needs KEY in npz)
+  thesis_loyo_data_source: shards
+  # If set, samples exactly K loadable tile-date keys per year (train years + held-out val year).
+  # Example: 200 -> 1000 total across 2017–2021, and 800 train / 200 val per fold.
+  thesis_loyo_keys_per_year: 200
+  thesis_loyo_keys_per_year_strict: false
+  # shards-mode flood-focused sampling: score patch by mean(Y>0) and pick top-K from a random pool (K*mult).
+  thesis_loyo_flood_pool_multiplier: 20
+  # After train/val split: keep all flood patches in train, but cap redundant dry patches (dry_count <= ratio * flood_count).
+  thesis_loyo_flood_biased_training: true
+  thesis_loyo_train_max_dry_vs_flood: 0.35
+  # Optional cap on dry patches (null = no extra cap beyond ratio).
+  thesis_loyo_train_max_dry_patches: null
+  # Ensure at least this many dry train patches if available (0 = no minimum).
+  thesis_loyo_train_min_dry_patches: 0
+  # Colab quick mode (avoid Drive cache filling /tmp): use only a small subset of shard files.
+  thesis_loyo_quick_mode: true
+  # Google Drive FUSE: scanning thousands of shards causes OSError 107 / full cache. Subset to N files unless false:
+  thesis_loyo_allow_full_drive_scan: false
+  thesis_loyo_quick_shards_n_files: 40
+  thesis_loyo_quick_shards_patches_per_file: 64
+  thesis_loyo_max_train_tiles: null
+  thesis_loyo_seed: 42
+  # train_thesis_loyo_fastai: one tile-date per batch (1 = full epoch visits every train key once per epoch)
+  thesis_loyo_batch_size: 1
+  thesis_loyo_load_audit_sample: 800  # random audit only if thesis_loyo_prune_failed_keys is false (0 = skip)
+  thesis_loyo_prune_failed_keys: true  # keep only keys where load_sample succeeds (recommended)
+  thesis_loyo_prune_val_keys: true
+  thesis_loyo_min_keys_after_load: 800  # abort fold if fewer train keys load OK
+  thesis_loyo_min_val_keys_after_load: 50
+  # thesis_loyo_min_random_audit_ok_frac: 0.92  # optional: if not pruning, abort when random audit OK rate below this
+  # train_thesis_loyo_fastai: epochs per LOYO fold (all train keys in one DataLoader each epoch)
+  thesis_loyo_epochs_per_fold: 1
+  # How many LOYO folds to run. null = auto: 1 fold if thesis_loyo_quick_mode (fast), else all years.
+  # Set 5 or "all" for full leave-one-year-out over loyo_cv.train_years.
+  thesis_loyo_fold_runs: null
+  # load_sample rejects tiles with fewer valid S1 pixels (default was 100; small bbox / Jakarta test may need 10–50)
+  thesis_loyo_min_valid_s1_pixels: 10
+  # scripts/train_sharded_loyo.py + ShardedPatchDataModule (patch_shard_*.npz on Drive/Colab)
+  sharded_max_open_shards: 4  # LRU mmap limit; lower on Colab if you hit local disk / FUSE issues
+  patch_size: 32             # Size of patches to create from full scene (32x32 pixels)
+  patch_stride: 16           # More patches by default (overlap helps small bboxes)
+
+# 6. Paths
+paths:
+  data_dir: "data"
+  logs_dir: "logs"
+  checkpoint_path: "logs/flood-model.ckpt"
+  # --- Two training data layouts (do not confuse them) ---
+  # (A) Raw 5° tile-dates: GeoTIFF + .npy — train_thesis_loyo_fastai when thesis_loyo_data_source: raw;
+  #     pipeline/tile_5d_loader.py, Tile5dDataModule (data_mode=tiles).
+  # (B) Patch shards patch_shard_*.npz under processed_tiles_5d — process_5d_tiles.ipynb; training.thesis_loyo_data_source: shards,
+  #     pipeline/sharded_patch_datamodule.py (Lightning), train_from_5d_data (data_mode=patches).
+  processed_tiles_5d: "data/processed_tiles"
+  # GEE export folders (Google Drive, under project root)
+  gee_modis_8day: "data/modis_8day"   # MODIS 8-day GeoTIFFs from GEE
+  modis_5d: "data/modis_5d"
+  modis_8day_5d: "data/modis_5d"
+  s1_labels_5d: "data/s1_labels_5d"
+  gee_static: "data/static"           # DEM, slope, HAND from GEE (optional quality signal)
+  gee_s1_labels: "data/s1_labels"     # S1 flood labels from GEE
